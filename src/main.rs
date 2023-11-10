@@ -1,185 +1,70 @@
-//! Shows how to iterate over combinations of query results.
+use std::panic::AssertUnwindSafe;
+use bevy::prelude::*;
+use bevy::sprite::MaterialMesh2dBundle;
+use bevy::time::Time;
+use rand::distributions::{Distribution, Uniform};
 
-use bevy::{pbr::AmbientLight, prelude::*};
-use rand::{rngs::StdRng, Rng, SeedableRng};
+fn random_color() -> Color {
+    let mut rng = rand::thread_rng();
+    let die = Uniform::from(0..255);
+
+    let r = die.sample(&mut rng);
+    let g = die.sample(&mut rng);
+    let b = die.sample(&mut rng);
+
+    Color::rgb_u8(r, g, b)
+}
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .insert_resource(AmbientLight {
-            brightness: 0.03,
-            ..default()
-        })
-        .insert_resource(ClearColor(Color::BLACK))
-        .add_systems(Startup, generate_bodies)
-        .add_systems(FixedUpdate, (interact_bodies, integrate))
-        .add_systems(Update, look_at_star)
+        .add_systems(Startup, setup)
+        .add_systems(FixedUpdate, do_update)
+        .insert_resource(FixedTime::new_from_secs(1.0))
         .run();
 }
 
-const GRAVITY_CONSTANT: f32 = 0.001;
-const NUM_BODIES: usize = 100;
+fn do_update(mut cells: Query<(&Cell, &mut Handle<ColorMaterial>)>, mut materials: ResMut<Assets<ColorMaterial>>) {
 
-#[derive(Component, Default)]
-struct Mass(f32);
-#[derive(Component, Default)]
-struct Acceleration(Vec3);
-#[derive(Component, Default)]
-struct LastPos(Vec3);
-#[derive(Component)]
-struct Star;
-
-#[derive(Bundle, Default)]
-struct BodyBundle {
-    pbr: PbrBundle,
-    mass: Mass,
-    last_pos: LastPos,
-    acceleration: Acceleration,
+   for(&cell, mut material) in &mut cells {
+       println!("update cell {}", cell.id);
+       println!("we got {} materials now loser", materials.len());
+        *material =  materials.add(ColorMaterial::from(random_color()));
+   }
 }
 
-fn generate_bodies(
-    time: Res<Time>,
+#[derive(Component, Default, Copy, Clone)]
+struct Cell{
+     id: i32,
+}
+
+fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let mesh = meshes.add(
-        Mesh::try_from(shape::Icosphere {
-            radius: 1.0,
-            subdivisions: 3,
-        })
-            .unwrap(),
+    //setup camera
+    commands.spawn(Camera2dBundle::default());
+
+    //make mesh
+    let square = meshes.add(
+        shape::Quad {
+            size: Vec2::new(50., 50.),
+            flip: false,
+        }
+        .into(),
     );
 
-    let color_range = 0.5..1.0;
-    let vel_range = -0.5..0.5;
-
-    let mut rng = StdRng::seed_from_u64(19878367467713);
-    for _ in 0..NUM_BODIES {
-        let radius: f32 = rng.gen_range(0.1..0.7);
-        let mass_value = radius.powi(3) * 10.;
-
-        let position = Vec3::new(
-            rng.gen_range(-1.0..1.0),
-            rng.gen_range(-1.0..1.0),
-            rng.gen_range(-1.0..1.0),
-        )
-            .normalize()
-            * rng.gen_range(0.2f32..1.0).cbrt()
-            * 15.;
-
-        commands.spawn(BodyBundle {
-            pbr: PbrBundle {
-                transform: Transform {
-                    translation: position,
-                    scale: Vec3::splat(radius),
-                    ..default()
-                },
-                mesh: mesh.clone(),
-                material: materials.add(
-                    Color::rgb(
-                        rng.gen_range(color_range.clone()),
-                        rng.gen_range(color_range.clone()),
-                        rng.gen_range(color_range.clone()),
-                    )
-                        .into(),
-                ),
+    for i in 0..5 {
+        //make objects
+        commands.spawn((
+            MaterialMesh2dBundle {
+                mesh: square.clone().into(),
+                material: materials.add(ColorMaterial::from(random_color())),
+                transform: Transform::from_translation(Vec3::new(50. * i as f32, 0., 0.)),
                 ..default()
             },
-            mass: Mass(mass_value),
-            acceleration: Acceleration(Vec3::ZERO),
-            last_pos: LastPos(
-                position
-                    - Vec3::new(
-                    rng.gen_range(vel_range.clone()),
-                    rng.gen_range(vel_range.clone()),
-                    rng.gen_range(vel_range.clone()),
-                ) * time.delta_seconds(),
-            ),
-        });
+            Cell{id: i},
+        ));
     }
-
-    // add bigger "star" body in the center
-    let star_radius = 1.;
-    commands
-        .spawn((
-            BodyBundle {
-                pbr: PbrBundle {
-                    transform: Transform::from_scale(Vec3::splat(star_radius)),
-                    mesh: meshes.add(
-                        Mesh::try_from(shape::Icosphere {
-                            radius: 1.0,
-                            subdivisions: 5,
-                        })
-                            .unwrap(),
-                    ),
-                    material: materials.add(StandardMaterial {
-                        base_color: Color::ORANGE_RED,
-                        emissive: (Color::ORANGE_RED * 2.),
-                        ..default()
-                    }),
-                    ..default()
-                },
-                mass: Mass(500.0),
-                ..default()
-            },
-            Star,
-        ))
-        .with_children(|p| {
-            p.spawn(PointLightBundle {
-                point_light: PointLight {
-                    color: Color::WHITE,
-                    intensity: 400.0,
-                    range: 100.0,
-                    radius: star_radius,
-                    ..default()
-                },
-                ..default()
-            });
-        });
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(0.0, 10.5, -30.0).looking_at(Vec3::ZERO, Vec3::Y),
-        ..default()
-    });
-}
-
-fn interact_bodies(mut query: Query<(&Mass, &GlobalTransform, &mut Acceleration)>) {
-    let mut iter = query.iter_combinations_mut();
-    while let Some([(Mass(m1), transform1, mut acc1), (Mass(m2), transform2, mut acc2)]) =
-        iter.fetch_next()
-    {
-        let delta = transform2.translation() - transform1.translation();
-        let distance_sq: f32 = delta.length_squared();
-
-        let f = GRAVITY_CONSTANT / distance_sq;
-        let force_unit_mass = delta * f;
-        acc1.0 += force_unit_mass * *m2;
-        acc2.0 -= force_unit_mass * *m1;
-    }
-}
-
-fn integrate(time: Res<Time>, mut query: Query<(&mut Acceleration, &mut Transform, &mut LastPos)>) {
-    let dt_sq = time.delta_seconds() * time.delta_seconds();
-    for (mut acceleration, mut transform, mut last_pos) in &mut query {
-        // verlet integration
-        // x(t+dt) = 2x(t) - x(t-dt) + a(t)dt^2 + O(dt^4)
-
-        let new_pos = transform.translation * 2.0 - last_pos.0 + acceleration.0 * dt_sq;
-        acceleration.0 = Vec3::ZERO;
-        last_pos.0 = transform.translation;
-        transform.translation = new_pos;
-    }
-}
-
-fn look_at_star(
-    mut camera: Query<&mut Transform, (With<Camera>, Without<Star>)>,
-    star: Query<&Transform, With<Star>>,
-) {
-    let mut camera = camera.single_mut();
-    let star = star.single();
-    let new_rotation = camera
-        .looking_at(star.translation, Vec3::Y)
-        .rotation
-        .lerp(camera.rotation, 0.1);
-    camera.rotation = new_rotation;
 }
